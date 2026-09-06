@@ -18,7 +18,8 @@
 - 行高降至与原版 Consolas 一致（**2398 = 1.171em**）；
 - 保持中文/英文宽度严格 **1:2**；
 - 中文字形等比缩小并居中，任何渲染路径下**零裁剪**；
-- 半角（Consolas）字形完全不动。
+- 原有半角（Consolas）字形坐标完全不动；
+- 补齐原合并字体缺少的常用标点/符号，同时保留 Unicode 明确的宽字符为全宽。
 
 最终效果：
 ![对比效果](./compare_lineheight.png)
@@ -56,8 +57,10 @@
 
 1. **等比缩放全部全角（雅黑）字形**：按比例 0.9121 缩小，横向居中到全角格；
 2. **垂直度量改回原版 Consolas 数值**，使行高 = 2398；
-3. **删除失效的 hinting 与竖排表**；
-4. **重命名字体族**，避免与已安装的同名字体冲突。
+3. **补齐 DejaVu Sans Mono 中缺失的标点/符号**：只处理 Unicode 类别 `P*`/`S*`，不混入阿拉伯文、格鲁吉亚文等其他文字脚本；
+4. **按 Unicode East Asian Width 处理补入符号的单元格宽度**：`W`/`F` 使用全宽 2048，其余使用半宽 1024；
+5. **删除失效的 hinting 与竖排表**；
+6. **重命名字体族**，避免与已安装的同名字体冲突。
 
 ---
 
@@ -65,13 +68,13 @@
 
 ### 4.1 字形缩放
 
-- 缩放对象：advance = 2048 的全角字形，共 **28,874 个**（总字形 31,450，半角字形不动）；
+- 缩放对象：advance = 2048 的全角字形，共 **28,874 个**（总字形 31,450，原有半角字形不动）；
 - 缩放前全角字形垂直范围：**[−521, 2108]**；
 - 缩放比例：**s = 2398 / 2629 ≈ 0.912134**（等比，横纵同比例）；
 - 垂直位移：**dy = −38.778**（线性映射 y′ = s·y + dy，把 [−521, 2108] 映射到 **[−514, 1884]**）；
 - 横向：以字形原中心为锚等比缩放后平移居中，`dx = 1024 − s·cx`，使字形在 0–2048 全角格内左右对称；
 - advance 宽度保持 2048 不变，**1:2 宽度比不受影响**；
-- 半角（Consolas）字形（如 A、g、标点）坐标**逐点不变**。
+- 原有半角（Consolas）字形（如 A、g、ASCII 标点）坐标**逐点不变**。
 
 示例：`中`
 
@@ -79,6 +82,43 @@
 | ------ | ------------ | --------------------------- |
 | x 范围 | [168, 1888]  | [240, 1808]（左右对称留白） |
 | y 范围 | [−277, 1707] | [−291, 1518]                |
+
+### 4.1.1 从 DejaVu Sans Mono 补齐缺失的标点/符号
+
+原合并字体和 Compact 字体都没有覆盖一部分终端常用符号，例如：
+
+```text
+❯  U+276F  HEAVY RIGHT-POINTING ANGLE QUOTATION MARK ORNAMENT
+➜  U+279C  HEAVY ROUND-TIPPED RIGHTWARDS ARROW
+```
+
+构建脚本从本机 DejaVu Sans Mono 读取目标字体缺失的 Unicode 码点：
+
+- 只补入 Unicode 类别 `P*`（标点）和 `S*`（符号）；
+- 差集共 821 个码点，其中 `U+FFFC OBJECT REPLACEMENT CHARACTER` 没有可见轮廓，因此跳过；
+- 最终补入 **820 个可见码点/字形**；
+- 不补入 DejaVu 中额外的阿拉伯文、老挝文、格鲁吉亚文等其他文字脚本；
+- DejaVu Sans Mono 与 Compact 都使用 `unitsPerEm = 2048`，补入字形不需要做单位换算。
+
+补入符号的宽度按 Unicode East Asian Width 处理：
+
+| East Asian Width | 数量 | Compact advance | 处理 |
+| ---------------- | ---- | --------------- | ---- |
+| `W` / `F`        | 19   | 2048            | 全宽 |
+| `N` / `Na` / `A` | 801  | 1024            | 半宽 |
+
+`A`（Ambiguous，模糊宽度）在代码编辑器和终端场景中按单列半宽处理，避免数学符号在普通终端中突然占用两列。
+
+典型结果：
+
+| 字符 | Unicode | East Asian Width | advance | glyph bbox（units） |
+| ---- | ------- | ---------------- | ------- | ------------------- |
+| `❯`  | U+276F | N                | 1024    | `[174, −159, 848, 1295]` |
+| `➜`  | U+279C | N                | 1024    | `[60, 295, 962, 1060]` |
+| `☕`  | U+2615 | W                | 2048    | `[130, 12, 1918, 1376]` |
+| `⚡`  | U+26A1 | W                | 2048    | `[226, 13, 1822, 1283]` |
+
+每个补入 glyph 都会根据其目标单元格横向缩放并居中；宽度较大的框线/数学符号还会额外缩小，确保 TrueType bbox 不超过 `0..advance`。补入集合的垂直范围会统一适配到 `−514..1884`，避免被新的 winAscent/winDescent 裁剪。
 
 ### 4.2 垂直度量（改为原版 Consolas 数值）
 
@@ -88,7 +128,7 @@
 | OS/2 | sTypoAscender / sTypoDescender / sTypoLineGap | 1663 / −519 / 9 | **1521 / −527 / 350** |
 | OS/2 | usWinAscent / usWinDescent                    | 2167 / 536      | **1884 / 514**        |
 | head | yMin / yMax（重算）                           | −648 / 2108     | **−648 / 2036**       |
-| head | xMin / xMax（重算）                           | −936 / 2050     | **−936 / 1961**       |
+| head | xMin / xMax（重算）                           | −936 / 2050     | **−936 / 2010**       |
 
 修改后行高 = 1521 + 527 + 350 = **2398（1.171em）**，与原版 Consolas 完全一致。
 
@@ -97,7 +137,7 @@
 | 项目                                               | 原因                                                                  |
 | -------------------------------------------------- | --------------------------------------------------------------------- |
 | `fpgm` / `prep` / `cvt`（字体级 TrueType hinting） | 指令基于原坐标编译，缩放后失效                                        |
-| 全部字形的 hinting 指令（`program`）               | 同上；含 28,874 个缩放字形（重建时丢弃）及 176 个半角字形（主动清除） |
+| 全部字形的 hinting 指令（`program`）               | 同上；原有 28,874 个缩放字形及 176 个原有半角字形的指令被清除；新增补字不带指令 |
 | `vhea` / `vmtx`（雅黑竖排度量）                    | 缩放后坐标错位；原版 Consolas 无此表，终端场景用不到                  |
 
 ### 4.4 字体命名
@@ -108,7 +148,7 @@
 | full name                   | Microsoft YaHei Consolas Regular | Microsoft YaHei Consolas Compact Regular |
 | postscript name             | —                                | MicrosoftYaHeiConsolasCompact            |
 
-改名是为了避免与系统中已安装的同名（family）字体冲突。
+改名是为了避免与系统中已安装的同名字体（family）冲突。
 
 ---
 
@@ -120,24 +160,48 @@
 | 34px 字号下实际行高（PIL/FreeType） | 45px           | **35px**                         | 35px           |
 | 中文/英文宽度比                     | 2.000          | **2.000**                        | —              |
 | 全角字形 y 范围                     | [−521, 2108]   | **[−514, 1884]**（win 内零裁剪） | —              |
-| 半角字形                            | —              | 未改动                           | —              |
+| 原有半角字形                        | —              | 坐标未修改                       | —              |
+| `❯` / `➜`                          | 缺失           | **存在，advance=1024**           | —              |
+| Unicode `W` 补入符号                | 缺失或不完整   | **19 个，advance=2048**          | —              |
+| 补入可见符号                        | —              | **820 个，均无单元格越界**       | —              |
+| 最终 glyph / cmap 数量              | 31,450 / 31,445 | **32,270 / 32,265**              | —              |
 
 ### 文件大小变化
 
-- 19,237,156 字节 → 8,618,108 字节（−55%）；
-- 差异几乎全部来自 `glyf` 表（18.77MB → 8.30MB，−10.48MB）；
-- 其中 **≈9.91MB 是雅黑字形自带的 TrueType hinting 指令**（28,848 个字形带指令，平均 330 字节/字形）在重建时被丢弃；
-- 其余来自删除 `vmtx`（−123KB）、`fpgm`/`prep`/`cvt`（−4.3KB）。
+- 原合并字体：**19,237,156 字节**；
+- 修改后 Compact：**8,731,300 字节**；
+- 相比原合并字体缩小约 **54.6%**；
+- 文件变小的主要原因是清除原字体自带的 TrueType hinting；新增 820 个符号 glyph 后，文件比未补字版本略大；
+- 文件大小变化是去除 hinting 和重建 glyph 表的结果，并非刻意压缩。
 
-文件变小是"去除 hinting"的必然副作用，而非刻意压缩。
+构建脚本还会重建 `maxp`、`head` 边界和 Unicode `cmap`。重复构建时，除 `head.modified` 保存时间戳外，输出内容保持一致。
 
 ---
 
 ## 6. 已知影响与注意事项
 
 1. **hinting 已全部移除**：传统 GDI 渲染下极低字号（<14px）边缘锐利度可能略降；现代渲染（DirectWrite ClearType、FreeType autohint、macOS CoreText）无感知差异。
-2. **52 个半角特殊符号**（如框线字符 U+2589 等）仍超出 winAscent/Descent 范围——原字体即如此，原版 Consolas 亦有类似情况，属正常行为，未处理。
-3. **安装方法**：将 `Microsoft YaHei Consolas Compact.ttf` 复制到 `~/.local/share/fonts/`（或 `/usr/share/fonts/`），执行 `fc-cache -f`，然后在应用中选择字体族 **Microsoft YaHei Consolas Compact**。
+2. **原字体的 52 个半角特殊符号**（如框线字符 U+2589 等）仍可能超出新的 winAscent/Descent 范围——这些原有字形未被重绘，原字体和原版 Consolas 亦有类似情况，属已知影响。
+3. **补入符号的来源**：补字来自本机 `/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf`。如果该路径不存在，需要修改 `build_compact_font.py` 中的 `DEJAVU_SRC`。
+4. **许可证**：DejaVu 字体基于 Bitstream Vera 字体许可。许可证允许复制、合并、修改和增加字形，但再分发修改后的字体时应保留版权/许可证声明；修改后的字体名称不能包含 `Bitstream` 或 `Vera`。本项目生成的名称为 `Microsoft YaHei Consolas Compact`，不包含这些名称。Debian 系统中的许可证文本位于 `/usr/share/doc/fonts-dejavu-core/copyright`。
+5. **安装方法**：将 `Microsoft YaHei Consolas Compact.ttf` 复制到用户字体目录，例如：
+
+   ```bash
+   cp "Microsoft YaHei Consolas Compact.ttf" \
+     "$HOME/.local/share/fonts/m/Microsoft YaHei Consolas Compact.ttf"
+   fc-cache -f "$HOME/.local/share/fonts"
+   ```
+
+   然后在应用中选择字体族 **Microsoft YaHei Consolas Compact**。如果 Zed 已经运行，建议完全退出后重新启动，使其重新加载字体缓存。
+
+6. **验证 U+276F 是否仍在 fallback**：
+
+   ```bash
+   fc-match -f '%{family}\n%{file}\n' \
+     'Microsoft YaHei Consolas Compact:charset=276f'
+   ```
+
+   预期结果应为 `Microsoft YaHei Consolas Compact` 及其安装路径，而不是 `Maple Mono NF CN`。如果仍然匹配到 Maple Mono，说明应用仍在使用旧字体文件或尚未刷新字体缓存。
 
 ---
 
@@ -147,14 +211,15 @@
 | -------------------------------------- | ----------------------------------------------------- |
 | `Microsoft YaHei Consolas Compact.ttf` | 修改后的字体（最终交付）                              |
 | `Microsoft YaHei Consolas Regular.ttf` | 原始合并字体（未改动，保留备份）                      |
-| `build_compact_font.py`                | 可复现的构建脚本（从原字体生成修改后字体）            |
-| `compare_lineheight.png`               | 字体行高对比图 |
+| `build_compact_font.py`                | 可复现的构建脚本（从原字体和 DejaVu Sans Mono 生成）  |
+| `compare_lineheight.png`               | 字体行高对比图                                        |
+| `/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf` | Linux 本机的补字来源，不随仓库提交                    |
 
 ---
 
 ## 8. 重新生成方法
 
-`build_compact_font.py` 是完整的可复现构建脚本，从原始字体一步生成修改后字体：
+`build_compact_font.py` 是完整的可复现构建脚本，从原始字体一步生成修改后字体。Linux 环境需要安装 DejaVu Sans Mono，并确保脚本中的 `DEJAVU_SRC` 路径有效：
 
 ```bash
 pip install fonttools        # 依赖（4.x）
@@ -162,20 +227,23 @@ python3 build_compact_font.py "Microsoft YaHei Consolas Compact.ttf"
 # 或省略参数，默认输出同名文件
 ```
 
-脚本按以下顺序处理（与本文档第 4 节一致）：
+脚本按以下顺序处理：
 
-1. 按 advance = 2048 划分全角（雅黑）字形；
-2. 计算全局变换参数（s = 0.912134，dy = −38.778）；
-3. **先展平全部复合字形为简单字形**（消除组件/复合字形的处理顺序依赖，保证确定性）；
-4. 逐字形等比缩放 + 横向居中，更新 hmtx 的 lsb；
-5. 重算 head 全局边界；
-6. 垂直度量改回原版 Consolas（行高 2398）；
-7. 删除 `fpgm`/`prep`/`cvt`/`vhea`/`vmtx`；
-8. 清除全部字形 hinting 指令；
-9. `maxp` 重算；
-10. 重命名 family 为 `Microsoft YaHei Consolas Compact`。
+1. 按 advance = 2048 划分原字体的全角（雅黑）字形；
+2. 计算全角字形的垂直变换参数（s = 0.912134，dy = −38.778）；
+3. **先展平全部原有复合字形为简单字形**，消除组件/复合字形的处理顺序依赖；
+4. 从 DejaVu Sans Mono 找出原字体缺失的 `P*`/`S*` 标点和符号；
+5. 跳过空轮廓码点（例如 U+FFFC），并按 East Asian Width 将 `W`/`F` 设为 2048，其余设为 1024；
+6. 复制、缩放、居中补入 glyph，更新 `cmap` 和 `hmtx`，确保 bbox 不超出目标单元格；
+7. 对原有 2048 advance 全角字形执行等比缩放并横向居中；
+8. 重算全部 glyph 边界和 `head` 全局边界；
+9. 垂直度量改回原版 Consolas（行高 2398）；
+10. 删除 `fpgm`/`prep`/`cvt`/`vhea`/`vmtx`；
+11. 清除全部字形 hinting 指令；
+12. 重算 `maxp`；
+13. 重命名 family 为 `Microsoft YaHei Consolas Compact` 并保存。
 
-两次独立运行输出逐字节一致（除 `head.modified` 保存时间戳），构建结果可复现、可审计。
+两次独立运行输出逐字节一致（仅 `head.modified` 保存时间戳不同），构建结果可复现、可审计。
 
 ---
 
@@ -203,8 +271,8 @@ Zed 中**多个 `font_family` 字段相互独立**，需要逐一改成新字体
 }
 ```
 
-保存后 Zed 会自动重载设置；若未生效请重启 Zed。只改了 `terminal.font_family` 而漏改 `buffer_font_family`，是"编辑区中文宽度不正确"最常见的原因。
+保存后 Zed 会自动重载设置；若未生效请重启 Zed。只改了 `terminal.font_family` 而漏改 `buffer_font_family`，是"编辑区中文宽度不正确"最常见的原因。安装新字体后，还应使用第 6 节的 `fc-match` 命令确认 U+276F 不再由 fallback 字体提供。
 
 ---
 
-_文档生成时间：2026-08-12。修改工具：fontTools 4.61.0。_
+_文档更新日期：2026-09-06。修改工具：fontTools 4.61.0。_
