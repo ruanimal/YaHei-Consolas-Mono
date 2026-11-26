@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 生成 compare_lineheight.png
-策略: 4 个字体两两分组 (Compact/Original, Hybrid/Consolas),
+策略: 4 个字体两两分组 (Mono/Original, Hybrid/Consolas),
       每组内并排, 各自的行高真实渲染, 画出行框 + baseline.
       这样行高差异、字符在行框内的密度差异一目了然.
 """
@@ -24,8 +24,8 @@ LINE_PAD = 8
 # 每组 2 个字体
 FONT_PAIRS = [
     [
-        ("Microsoft YaHei Consolas Compact",
-         "/Users/ruan/Library/Fonts/Microsoft YaHei Consolas Compact.ttf"),
+        ("YaHei Consolas Mono",
+         "/Users/ruan/Library/Fonts/YaHei Consolas Mono.ttf"),
         ("Microsoft YaHei Consolas",
          "/Users/ruan/Library/Fonts/Microsoft YaHei Consolas Regular.ttf"),
     ],
