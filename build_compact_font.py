@@ -11,7 +11,8 @@ build_compact_font.py — 从 "Microsoft YaHei Consolas Regular.ttf" 生成
 5. 重命名 family 为 "YaHei Consolas Mono"（单字重家族，full name 不再带 Regular）
 6. 把 0.6em(1229) 档的块元素/几何图形归一化到 1024 半角格（消掉同码块宽度分裂
    与 14 个块元素字形的横向越界），并把块元素的纵向盒子统一到整格 [-514, 1884]
-7. 声明 isFixedPitch=1 / panose.bProportion=9，写入版本/厂商标识，并在保存前做自检
+7. 把剩余 31 个比例标点和符号归入 1024 半角格，校验全部字形的前进宽度
+8. 声明 isFixedPitch=1 / panose.bProportion=9，写入版本/厂商标识，并在保存前做自检
 
 依赖：fontTools >= 4.x   （pip install fonttools）
 用法：python3 build_compact_font.py
@@ -20,6 +21,7 @@ import sys
 from collections import Counter
 from unicodedata import category, east_asian_width
 
+from fontTools.misc.roundTools import otRound
 from fontTools.ttLib import TTFont
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.pens.transformPen import TransformPen
@@ -48,7 +50,7 @@ NEW_PS_NAME = "YaHeiConsolasMono"
 # FONT_VERSION 是版本信息的单一真源：head.fontRevision 与 name ID 3/5 都由它
 # 派生，verify_font 会校验三者一致。递增规则：改字形/度量/元数据 -> +0.001；
 # 仅重建 -> 不变号；重新同步上游 -> 主版本 +1 并更新 BASE_VERSION。
-FONT_VERSION = "1.001"          # 1.000 首次发布；1.001 改族名与 full name
+FONT_VERSION = "1.002"          # 归一化剩余比例符号
 BASE_VERSION = "6.250"          # 所基于的 Microsoft YaHei Consolas 版本
 BUILD_TOOL = "build_compact_font.py"
 VENDOR_ID = "RUAN"              # OS/2.achVendID，必须 4 字符 ASCII
@@ -99,16 +101,14 @@ BLOCK_SOURCE_FAMILY = {
 # 应当贴满整格的"满块"字形：█ ▉ ▐ ▕
 BLOCK_FULL_CODEPOINTS = (0x2588, 0x2589, 0x2590, 0x2595)
 
-# 已知仍为比例宽度的字形（P1/P2 未处理的标点与数学符号），自检时作为白名单；
-# 除此之外出现任何非 {0, 1024, 2048} 的 advance 都视为回归。
-KNOWN_OFFGRID_CODEPOINTS = {
-    0x02C9: 701, 0x2010: 886, 0x2025: 985, 0x2027: 493, 0x2032: 523, 0x2035: 522,
-    0x203B: 1724, 0x215F: 1925, 0x221D: 1806, 0x2220: 1438, 0x2223: 1124,
-    0x2225: 1491, 0x2227: 1489, 0x2228: 1489, 0x222E: 1190, 0x2234: 1438,
-    0x2235: 1438, 0x2236: 1767, 0x2237: 1767, 0x223D: 1489, 0x224C: 1124,
-    0x2252: 1491, 0x2266: 1124, 0x2267: 1124, 0x226E: 1124, 0x226F: 1124,
-    0x2295: 1638, 0x22BF: 1460, 0x2605: 1671, 0x2606: 1686, 0x2609: 1638,
-}
+# 同组的字形使用相同的缩放比例。数学点阵通过平移各个点收紧间距。
+HALF_WIDTH_SYMBOL_GROUPS = (
+    "ˉ", "‐", "‥", "‧", "′‵", "※", "⅟", "∝", "∠", "∣", "∥", "∧∨",
+    "∮", "∴∵", "∶", "∷", "∽", "≌", "≒", "≦≧≮≯", "⊕", "⊿", "★☆", "☉",
+)
+PROPORTIONALLY_SCALED_SYMBOLS = frozenset("※⅟∝∠⊕⊿★☆☉")
+DOT_PATTERN_SYMBOLS = frozenset("∴∵∷")
+SYMBOL_SIDE_BEARING = 32
 
 
 def supplement_missing_symbols(font, all_glyphs):
@@ -310,6 +310,59 @@ def normalize_half_width_symbols(font, all_glyphs):
     )
 
 
+def tighten_dot_spacing(glyph, center, max_ink_width):
+    """横向移动点阵的各个轮廓，保留圆点的大小和纵向位置。"""
+    points = glyph.coordinates
+    dots = []
+    start = 0
+    for end in glyph.endPtsOfContours:
+        contour = points[start:end + 1]
+        left = min(x for x, _ in contour)
+        right = max(x for x, _ in contour)
+        dots.append((range(start, end + 1), (left + right) / 2, right - left))
+        start = end + 1
+
+    left_center = min(x for _, x, _ in dots)
+    right_center = max(x for _, x, _ in dots)
+    source_center = (left_center + right_center) / 2
+    dot_width = max(width for _, _, width in dots)
+    spacing_scale = (max_ink_width - dot_width) / (right_center - left_center)
+    for indices, dot_center, _ in dots:
+        dx = otRound(center + spacing_scale * (dot_center - source_center) - dot_center)
+        for index in indices:
+            x, y = points[index]
+            points[index] = (x + dx, y)
+
+
+def normalize_remaining_symbols(font):
+    """将其余比例标点和数学符号归入带留白的半角格。"""
+    cmap, glyf, hmtx = font.getBestCmap(), font["glyf"], font["hmtx"]
+    center = SYMBOL_TARGET_ADVANCE / 2
+    max_ink_width = SYMBOL_TARGET_ADVANCE - 2 * SYMBOL_SIDE_BEARING
+    for group in HALF_WIDTH_SYMBOL_GROUPS:
+        names = [cmap[ord(character)] for character in group]
+        for name in names:
+            glyf[name].recalcBounds(glyf)
+        group_width = max(glyf[name].xMax - glyf[name].xMin for name in names)
+        sx = min(1.0, max_ink_width / group_width)
+        for character, name in zip(group, names):
+            glyph = glyf[name]
+            if character in DOT_PATTERN_SYMBOLS and sx < 1.0:
+                tighten_dot_spacing(glyph, center, max_ink_width)
+            else:
+                sy = sx if character in PROPORTIONALLY_SCALED_SYMBOLS else 1.0
+                dx = center - sx * (glyph.xMin + glyph.xMax) / 2
+                dy = (1.0 - sy) * (glyph.yMin + glyph.yMax) / 2
+                points = glyph.coordinates
+                for index, (x, y) in enumerate(points):
+                    points[index] = (otRound(sx * x + dx), otRound(sy * y + dy))
+            glyph.recalcBounds(glyf)
+            hmtx[name] = (SYMBOL_TARGET_ADVANCE, glyph.xMin)
+
+    count = sum(map(len, HALF_WIDTH_SYMBOL_GROUPS))
+    print(f"比例标点和符号归一化: {count} 个，advance={SYMBOL_TARGET_ADVANCE}")
+
+
 def unify_block_element_box(font, all_glyphs):
     """把 U+2580-259F 的纵向盒子统一到整格 [-514, 1884]。
 
@@ -432,13 +485,7 @@ def apply_version_metadata(font):
 
 
 def declare_fixed_pitch(font):
-    """恢复上游语义：半角格与全角格各自内部等宽（duospaced）。
-
-    上游 Microsoft-YaHei-Mono 与本机的 Sarasa Mono SC / Maple Mono NF CN /
-    Cascadia Next SC 都声明 isFixedPitch=1 + panose.bProportion=9，尽管各自
-    都保留了少量设计特例的离格 advance。真正决定终端对齐的是 advance 网格，
-    这两个字段只影响 Linux fontconfig 的字体匹配与编辑器的 mono 筛选。
-    """
+    """写入双宽字体的元数据。Fontconfig 根据实际 advance 判定双宽。"""
     font["post"].isFixedPitch = 1
     font["OS/2"].panose.bProportion = 9
     print("等宽声明: post.isFixedPitch=1, OS/2.panose.bProportion=9")
@@ -449,17 +496,27 @@ def verify_font(font):
     problems = []
     hmtx, glyf, cmap = font["hmtx"], font["glyf"], font.getBestCmap()
 
-    # 1) advance 只允许 0/1024/2048；白名单之外的离格值即回归
+    # 1) 校验整张 hmtx，包含无 Unicode 映射的字形。
     unexpected = sorted(
-        (cp, hmtx[gname][0]) for cp, gname in cmap.items()
-        if hmtx[gname][0] not in (0, SYMBOL_TARGET_ADVANCE, 2048)
-        and KNOWN_OFFGRID_CODEPOINTS.get(cp) != hmtx[gname][0]
+        (name, advance) for name, (advance, _) in hmtx.metrics.items()
+        if advance not in (0, SYMBOL_TARGET_ADVANCE, 2048)
     )
     if unexpected:
         problems.append(
             f"出现 {len(unexpected)} 个非网格 advance: "
-            + ", ".join(f"U+{cp:04X}={adv}" for cp, adv in unexpected[:10])
+            + ", ".join(f"{name}={advance}" for name, advance in unexpected[:10])
         )
+
+    for character in "".join(HALF_WIDTH_SYMBOL_GROUPS):
+        name = cmap[ord(character)]
+        glyph = glyf[name]
+        if (
+            not glyph.numberOfContours
+            or hmtx[name] != (SYMBOL_TARGET_ADVANCE, glyph.xMin)
+            or glyph.xMin < SYMBOL_SIDE_BEARING
+            or glyph.xMax > SYMBOL_TARGET_ADVANCE - SYMBOL_SIDE_BEARING
+        ):
+            problems.append(f"U+{ord(character):04X} {character} 未落到带留白的半角格")
 
     # 2) 块元素/几何图形必须已归一化到半角格且不越界
     stray = []
@@ -634,6 +691,9 @@ def main():
 
     # ---- 5c. 把块元素的纵向盒子统一到整格（四个来源的高度各不相同）----
     unify_block_element_box(font, all_glyphs)
+
+    # ---- 5d. 把剩余比例标点和数学符号归入半角格 ----
+    normalize_remaining_symbols(font)
 
     # ---- 6. 让全部字形可计算边界（TTGlyphPen 产物为懒加载状态，maxp.recalc 需要）----
     for gn in all_glyphs:

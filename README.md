@@ -60,7 +60,7 @@
 3. **补齐 DejaVu Sans Mono 中缺失的标点/符号**：只处理 Unicode 类别 `P*`/`S*`，不混入阿拉伯文、格鲁吉亚文等其他文字脚本；
 4. **按 Unicode East Asian Width 处理补入符号的单元格宽度**：`W`/`F` 使用全宽 2048，其余使用半宽 1024；
 5. **删除失效的 hinting 与竖排表**；
-6. **把残留的 0.6em（1229）比例符号归一到 1024 半角格**：14 个块元素 + 9 个几何图形；
+6. **把离格符号归到 1024 半角格**，包括 14 个块元素、9 个几何图形和其余 31 个标点与数学符号；
 7. **把块元素的纵向盒子统一到整格 [−514, 1884]**：四个来源的原始盒子高度从 2180 到 2482 不等；
 8. **声明 duospaced**：`post.isFixedPitch=1`、`OS/2.panose.bProportion=9`，与上游及同类 CJK 等宽字体一致；
 9. **写入版本与厂商标识**：`head.fontRevision`、`name` ID 3/5/8/11、`OS/2.achVendID`；
@@ -159,7 +159,7 @@
 
 本字体是**单字重家族**：`name` ID 2 仍是 `Regular`（RIBBI 必需，否则字体归类异常），但 full name 直接等于族名，菜单里显示为「YaHei Consolas Mono」而不是「YaHei Consolas Mono Regular」。没有 Bold 字体时，终端 ANSI bold 与编辑器语法高亮会由系统合成加粗（faux bold）。
 
-### 4.5 半宽符号归一化（1229 → 1024）
+### 4.5 半宽符号归一化
 
 上游雅黑把块元素与几何图形设计在 **0.6em = 1229** 的比例格位里，与本字体的 1024 半角格冲突：同一个码块里 1024 与 1229 并存，`▁▂▃▄` 这类进度条会在 1/4 处突然变宽；其中 14 个块元素的 bbox 还是 `[−23, 1251]`，左右各越出格位 23 单位。
 
@@ -174,13 +174,15 @@
 | 块元素 `▁▂▃▅▆▇▉▊▋▍▎▏▔▕` | advance 1229，bbox `[−23, 1251]` | advance **1024**，bbox `[0, 1024]`（`▉..▏` 左贴边、`▕` 右贴边） |
 | 几何图形 `△▽◆◇◎◢◣◤◥` | advance 1229 | advance **1024**，轮廓未缩放，居中 |
 
-**仍保留比例宽度的 31 个字形**（P1/P2 尚未处理）。构建脚本把它们列在 `KNOWN_OFFGRID_CODEPOINTS` 白名单里，除此之外出现任何非 `{0, 1024, 2048}` 的 advance 都会让构建失败：
+**1.002 将剩余 31 个比例标点与符号统一为半角 advance 1024。** 其中 30 个属于 East Asian Width `A`，`⅟` 属于 `N`，都按终端和代码编辑场景中的单列宽度处理。
 
-| 类别 | 字符 | 宽度 |
+| 类别 | 字符 | 原 advance |
 | --- | --- | --- |
 | 标点小符号 | `‧` `‵` `′` `ˉ` `‐` `‥` | 493 – 985 |
 | 数学运算符 | `∣` `≌` `≦` `≧` `≮` `≯` `∮` `∠` `∴` `∵` `∧` `∨` `∽` `∥` `≒` `⊿` `⊕` `∶` `∷` `∝` | 1124 – 1806 |
 | 其他符号 | `※` `★` `☆` `☉` `⅟` | 1638 – 1925 |
+
+左右各留至少 32 单位。能放进留白范围的轮廓平移居中，`∧∨`、`≦≧≮≯` 等同组字形共用横向缩放比例，`∴∵∷` 通过平移各个点收紧点距。`※`、`★☆`、`⊕`、`☉` 等符号等比缩小，保留星形和圆形的比例。构建会校验这些轮廓的左右边距，并检查整张 `hmtx` 表只包含 `0 / 1024 / 2048`。
 
 ### 4.6 块元素纵向整格统一
 
@@ -211,7 +213,7 @@
 
 ### 4.7 等宽声明（duospaced）
 
-`isFixedPitch = 1` 在 CJK 双宽字体里的实际语义是"**每个格位内部等宽**"，不是"所有字形同一个 advance"。上游与本机同类字体都是这么声明的：
+`post.isFixedPitch = 1` 和 `OS/2.panose.bProportion = 9` 是字体元数据。对齐由 `hmtx` 中的实际 advance 决定。
 
 | 字体 | 半角 / 全角 advance | 离格 advance | isFixedPitch | panose.bProportion |
 | --- | --- | --- | --- | --- |
@@ -219,12 +221,15 @@
 | Sarasa Mono SC | 500 / 1000 | 8 种（含 2000 / 3000） | 1 | 9 |
 | Maple Mono NF CN | 600 / 1200 | 0 | 1 | 9 |
 | Cascadia Next SC | 1024 / 2048 | 4 种（2045–2049 舍入残差） | 1 | 9 |
-| **本项目** | **1024 / 2048** | **19 种（31 个比例符号）** | **1** | **9** |
+| **本项目** | **1024 / 2048** | **0** | **1** | **9** |
 
-生效范围要说清楚：
+Fontconfig 根据非零 advance 计算间距类型。1.002 的两档宽度为 `1024` 和 `2048`，扫描结果为 `spacing=90`（`FC_DUAL`）。[Fontconfig 源码](https://github.com/fontconfig/fontconfig/blob/2.15.0/src/fcfreetype.c#L2423-L2455)
 
-- **有效**：Linux 的 fontconfig / FreeType（`fc-match monospace` 能否选中、`spacing=mono` 属性）、部分 IDE 的"只列出等宽字体"筛选。
-- **无效**：Windows GDI 的 `TMPF_FIXED_PITCH` 是由实测字符宽度推导的，不读 `post.isFixedPitch`；macOS CoreText 同样不依赖该字段。**因此声明本身不会改变任何渲染对齐**，对齐完全由 advance 网格决定。
+```bash
+fc-scan --format '%{family}\tspacing=%{spacing}\n' "YaHei Consolas Mono.ttf"
+```
+
+Kitty 的等宽筛选接受 `FC_DUAL`。Qt 的 Fontconfig 后端要求 `spacing >= 100`，因此该筛选仍会排除双宽字体。[Kitty 源码](https://github.com/kovidgoyal/kitty/blob/master/kitty/fonts/fontconfig.py#L49-L61) · [Qt 源码](https://github.com/qt/qtbase/blob/dev/src/gui/text/unix/qfontconfigdatabase.cpp#L3073)
 
 ### 4.8 版本与厂商标识
 
@@ -232,9 +237,9 @@
 
 | 字段 | 改前 | 改后 |
 | --- | --- | --- |
-| `head.fontRevision` | 6.25 | **1.001** |
-| `name` ID 3（Unique ID） | `Microsoft YaHei Consolas:Version 6.250` | `YaHei Consolas Mono;1.001` |
-| `name` ID 5（Version） | `Version 6.250;May 4, 2022;FontCreator 14.0.0.2814 64-bit` | `Version 1.001;build_compact_font.py (base 6.250)` |
+| `head.fontRevision` | 6.25 | **1.002** |
+| `name` ID 3（Unique ID） | `Microsoft YaHei Consolas:Version 6.250` | `YaHei Consolas Mono;1.002` |
+| `name` ID 5（Version） | `Version 6.250;May 4, 2022;FontCreator 14.0.0.2814 64-bit` | `Version 1.002;build_compact_font.py (base 6.250)` |
 | `name` ID 8（厂商） | `Microsoft Corporation` | `ruanimal` |
 | `name` ID 11（厂商网址） | `microsoft.com/typography` | `github.com/ruanimal/Microsoft-Yahei-Consolas-Compact` |
 | `OS/2.achVendID` | `"MS  "` | `"RUAN"` |
@@ -244,7 +249,7 @@
 版本号在脚本里是**单一真源**：
 
 ```python
-FONT_VERSION = "1.001"    # 派生 head.fontRevision 与 name ID 3/5
+FONT_VERSION = "1.002"    # 派生 head.fontRevision 与 name ID 3/5
 BASE_VERSION = "6.250"    # 所基于的上游版本，写进 name ID 5 供追溯
 ```
 
@@ -252,7 +257,7 @@ BASE_VERSION = "6.250"    # 所基于的上游版本，写进 name ID 5 供追�
 
 | 变更类型 | 操作 |
 | --- | --- |
-| 改字形 / 度量 / 元数据 | `1.000` → `1.001`（次版本 +0.001） |
+| 改字形 / 度量 / 元数据 | `1.001` → `1.002`（次版本 +0.001） |
 | 仅重建、内容不变 | 不变号（`head.modified` 会变） |
 | 重新同步上游 | 主版本 +1（`2.000`），并更新 `BASE_VERSION` |
 
@@ -272,18 +277,19 @@ BASE_VERSION = "6.250"    # 所基于的上游版本，写进 name ID 5 供追�
 | `❯` / `➜`                          | 缺失           | **存在，advance=1024**           | —              |
 | Unicode `W` 补入符号                | 缺失或不完整   | **19 个，advance=2048**          | —              |
 | 补入可见符号                        | —              | **820 个，均无单元格越界**       | —              |
-| advance 种类                        | 23 种（3 网格 + 20 离格） | **22 种（3 网格 + 19 离格）** | —        |
+| advance 种类                        | 23 种（3 网格 + 20 离格） | **`0 / 1024 / 2048`**          | —              |
+| Fontconfig `spacing`                | 空（比例字体） | **90（双宽）**                   | 100（等宽）    |
 | 块元素 advance（U+2580–259F）       | 1229 × 14 个   | **1024，bbox 落在 `[0, 1024]`**  | —              |
 | 块元素纵向盒子                      | 2180 / 2091 / 2365 / 2482（四套） | **单一整格 [−514, 1884]** | —      |
 | 超出 `[−514, 1884]` 的字形数        | 69             | **44**（余下为拉丁组合附加符号） | —              |
 | 等宽声明 `isFixedPitch` / `panose`  | 0 / 3          | **1 / 9**                        | 1 / 9          |
-| 字体版本                            | 6.250（2022, FontCreator） | **1.001**               | —              |
+| 字体版本                            | 6.250（2022, FontCreator） | **1.002**               | —              |
 | 最终 glyph / cmap 数量              | 31,450 / 31,445 | **32,270 / 32,265**              | —              |
 
 ### 文件大小变化
 
 - 原合并字体：**19,237,156 字节**；
-- 修改后 YaHei Consolas Mono：**8,731,036 字节**；
+- 修改后 YaHei Consolas Mono：**8,730,984 字节**；
 - 相比原合并字体缩小约 **54.6%**；
 - 文件变小的主要原因是清除原字体自带的 TrueType hinting；新增 820 个符号 glyph 后，文件比未补字版本略大；
 - 文件大小变化是去除 hinting 和重建 glyph 表的结果，并非刻意压缩。
@@ -296,8 +302,8 @@ BASE_VERSION = "6.250"    # 所基于的上游版本，写进 name ID 5 供追�
 
 1. **hinting 已全部移除**：传统 GDI 渲染下极低字号（<14px）边缘锐利度可能略降；现代渲染（DirectWrite ClearType、FreeType autohint、macOS CoreText）无感知差异。
 2. **仍有 44 个字形超出 win 盒**（原合并字体为 69 个）：块元素已在 4.6 归入整格 [−514, 1884]，剩下的主要是拉丁组合附加符号（如 U+0348 到 −612、U+035F 到 −648）和部分带附加符的拉丁字母——这些原有字形未被重绘，上游与多数西文字体也有类似情况，属已知影响。
-3. **31 个比例字形仍不是半宽**：`※ ★ ☆ ☉ ⅟`、`∮ ∠ ∴ ∵ ∧ ∨` 等标点与数学符号保留了上游的比例宽度（493–1925），见 4.5 的白名单表。它们在中文 locale 的终端里按 EAW=A 占 2 列，实际 advance 却只有 0.24–0.94em，混排时仍会错位；这是尚未处理的 P1/P2 项目。
-4. **没有真实 Bold**：本字体是单字重家族，终端 ANSI bold 与编辑器语法高亮由系统合成（faux bold），10–12px 下笔画会略糊、个别渲染器可能让字宽变化 ±1px。若要真 Bold，可用同一条流水线对 `Microsoft YaHei Consolas Bold.ttf` 构建——但 Bold 源的离格符号与 Regular 不同（95 个 1229 宽度字形 + 586/631/885/1173/1257/1556/1559 等额外值），需要另做一份白名单。
+3. **终端的模糊宽度设置**。采用单列配置时，终端格位和本字体的 `A` 类半角符号一致。终端如果将这些字符算作两列，会额外占一格。[WezTerm 字宽设置](https://wezterm.org/config/lua/config/treat_east_asian_ambiguous_width_as_wide.html)
+4. **粗体由系统合成**。本字体是单字重家族，终端 ANSI bold 与编辑器语法高亮使用合成粗体（faux bold），10–12px 下笔画会略糊、个别渲染器可能让字宽变化 ±1px。`Microsoft YaHei Consolas Bold.ttf` 需要按其源字形另外适配半角格。
 5. **补入符号的来源**：补字来自本机 `/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf`。如果该路径不存在，需要修改 `build_compact_font.py` 中的 `DEJAVU_SRC`。
 6. **许可证**：DejaVu 字体基于 Bitstream Vera 字体许可。许可证允许复制、合并、修改和增加字形，但再分发修改后的字体时应保留版权/许可证声明；修改后的字体名称不能包含 `Bitstream` 或 `Vera`。本项目生成的名称为 `YaHei Consolas Mono`，不包含这些名称。Debian 系统中的许可证文本位于 `/usr/share/doc/fonts-dejavu-core/copyright`。
 7. **安装方法**：将 `YaHei Consolas Mono.ttf` 复制到用户字体目录，例如：
@@ -308,7 +314,7 @@ BASE_VERSION = "6.250"    # 所基于的上游版本，写进 name ID 5 供追�
    fc-cache -f "$HOME/.local/share/fonts"
    ```
 
-   然后在应用中选择字体族 **YaHei Consolas Mono**。如果 Zed 已经运行，建议完全退出后重新启动，使其重新加载字体缓存。安装后可用 `fc-scan --format '%{fontversion}\n' "YaHei Consolas Mono.ttf"` 确认版本：输出 `65602` 即 `1.001`（fontconfig 该字段是 `head.fontRevision × 65536` 的定点整数），以此判断系统是否真的换上了新版本。
+   然后在应用中选择字体族 **YaHei Consolas Mono**。如果 Zed 已经运行，建议完全退出后重新启动，使其重新加载字体缓存。安装后可用 `fc-match --format '%{file}\n%{fontversion}\n%{spacing}\n' 'YaHei Consolas Mono'` 查看系统选中的文件。1.002 对应版本值 `65667`，`spacing` 应为 `90`。
 
 8. **验证 U+276F 是否仍在 fallback**：
 
@@ -353,7 +359,7 @@ python3 build_compact_font.py "YaHei Consolas Mono.ttf"
 6. 复制、缩放、居中补入 glyph，更新 `cmap` 和 `hmtx`，确保 bbox 不超出目标单元格；
 7. 对原有 2048 advance 全角字形执行等比缩放并横向居中；
 8. **把 1229 档的块元素与几何图形归一到 1024 半角格**（见 4.5）；
-9. **把块元素的纵向盒子统一到整格 [−514, 1884]**（见 4.6）；
+9. **把块元素的纵向盒子统一到整格 [−514, 1884]，再归一化其余 31 个比例符号**（见 4.6 和 4.5）；
 10. 重算全部 glyph 边界和 `head` 全局边界；
 11. 重算 `hhea` 派生度量（`advanceWidthMax` / `minLeftSideBearing` / `minRightSideBearing` / `xMaxExtent`）；
 12. 垂直度量改回原版 Consolas（行高 2398）；
